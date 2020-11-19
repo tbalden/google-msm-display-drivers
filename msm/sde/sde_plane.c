@@ -2003,7 +2003,13 @@ static void sde_plane_cleanup_fb(struct drm_plane *plane,
 	msm_framebuffer_cleanup(old_state->fb, old_pstate->aspace);
 
 }
-
+#ifdef CONFIG_UCI
+static bool force_update = false;
+void uci_force_sde_update(void) {
+	force_update = true;
+}
+EXPORT_SYMBOL(uci_force_sde_update);
+#endif
 static void _sde_plane_sspp_atomic_check_mode_changed(struct sde_plane *psde,
 		struct drm_plane_state *state,
 		struct drm_plane_state *old_state)
@@ -2012,6 +2018,12 @@ static void _sde_plane_sspp_atomic_check_mode_changed(struct sde_plane *psde,
 	struct sde_plane_state *old_pstate = to_sde_plane_state(old_state);
 	struct drm_framebuffer *fb, *old_fb;
 
+#ifdef CONFIG_UCI
+	if (force_update) {
+		force_update = false;
+		pstate->dirty = SDE_PLANE_DIRTY_ALL;
+	}
+#endif
 	/* no need to check it again */
 	if (pstate->dirty == SDE_PLANE_DIRTY_ALL)
 		return;
