@@ -22,6 +22,13 @@
 #include "dsi_parser.h"
 #include "sde_trace.h"
 
+#ifdef CONFIG_UCI
+#include <linux/uci/uci.h>
+#endif
+#ifdef CONFIG_UCI_NOTIFICATIONS_SCREEN_CALLBACKS
+#include <linux/notification/notification.h>
+#endif
+
 #define to_dsi_display(x) container_of(x, struct dsi_display, host)
 #define INT_BASE_10 10
 
@@ -1039,16 +1046,28 @@ int dsi_display_set_power(struct drm_connector *connector,
 	switch (power_mode) {
 	case SDE_MODE_DPMS_LP1:
 		rc = dsi_panel_set_lp1(display->panel);
+#ifdef CONFIG_UCI_NOTIFICATIONS_SCREEN_CALLBACKS
+		ntf_screen_off();
+#endif
 		break;
 	case SDE_MODE_DPMS_LP2:
 		rc = dsi_panel_set_lp2(display->panel);
+#ifdef CONFIG_UCI_NOTIFICATIONS_SCREEN_CALLBACKS
+		ntf_screen_off();
+#endif
 		break;
 	case SDE_MODE_DPMS_ON:
 		if (is_lp_mode(display->panel->power_mode))
 			rc = dsi_panel_set_nolp(display->panel);
+#ifdef CONFIG_UCI_NOTIFICATIONS_SCREEN_CALLBACKS
+		ntf_screen_on();
+#endif
 		break;
 	case SDE_MODE_DPMS_OFF:
 	default:
+#ifdef CONFIG_UCI_NOTIFICATIONS_SCREEN_CALLBACKS
+		ntf_screen_off();
+#endif
 		return rc;
 	}
 
