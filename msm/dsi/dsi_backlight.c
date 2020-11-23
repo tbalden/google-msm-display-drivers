@@ -109,8 +109,12 @@ static void uci_sys_listener(void) {
 					uci_switch_hbm(0);
 				}
 			} else { // new lux level is high...let's switch it on
-				if (!last_hbm_mode || uci_lux_level == -1) { //... if it's not yet on...or fresh screen off/on cycle...
-					uci_switch_hbm(1);
+				struct dsi_panel *panel = NULL;
+				if (bl_g!=NULL) {
+					panel = container_of(bl_g, struct dsi_panel, bl_config);
+					if (!last_hbm_mode || (last_hbm_mode && panel->hbm_mode==0) || uci_lux_level == -1) { //... if it's not yet on...or fresh screen off/on cycle...
+						uci_switch_hbm(1);
+					}
 				}
 			}
 		}
