@@ -124,7 +124,7 @@ static void uci_sys_listener(void) {
 		int new_lux_level = uci_get_sys_property_int_mm("lux_level_detailed", 0, 0, 270000);
 		pr_info("%s [aod_dimmer] is_lp_mode_on - sys - new lux level %d\n",__func__,new_lux_level);
 		if (lp_kcal_overlay && new_lux_level <=10) {
-			int lvl = lp_kcal_overlay_level + new_lux_level;
+			int lvl = lp_kcal_overlay_level + (new_lux_level*2);
 			if (kcal_internal_override(254,254,254,lvl,lvl,lvl)>0) {
 				pr_info("%s [aod_dimmer] is_lp_mode_on - sys - force_update - lvl %d\n",__func__,lvl);
 				kcal_force_update();
@@ -146,7 +146,7 @@ static void uci_user_listener(void) {
 	lp_kcal_overlay = !!uci_get_user_property_int_mm("lp_kcal_overlay", 0, 0, 1);
 	lp_kcal_overlay_always = !!uci_get_user_property_int_mm("lp_kcal_overlay_always", 1, 0, 1);
 	lp_kcal_overlay_dynamic = !!uci_get_user_property_int_mm("lp_kcal_overlay_dynamic", 1, 0, 1);
-	lp_kcal_overlay_level = uci_get_user_property_int_mm("lp_kcal_overlay_level", 50, 20, 60);
+	lp_kcal_overlay_level = uci_get_user_property_int_mm("lp_kcal_overlay_level", 50, 20, 110);
 	if (new_hbm_switch!=uci_hbm_switch || new_hbm_use_ambient_light!=uci_hbm_use_ambient_light) {
 		uci_hbm_switch = new_hbm_switch;
 		uci_hbm_use_ambient_light = new_hbm_use_ambient_light;
