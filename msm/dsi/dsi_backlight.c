@@ -49,11 +49,100 @@ static bool first_brightness_set = false;
 
 #ifdef CONFIG_UCI
 extern void uci_set_forced_freq(int freq, bool force_mode_change);
-extern void uci_release_forced_freq(bool force_mode_change);
+extern void uci_trigger_mode_update(bool force_mode_change);
 #endif
 
 #ifdef CONFIG_UCI
 static struct dsi_backlight_config *bl_g;
+
+// ---------- GAMM tweaks: dynamic
+// should the gamma values be tweaked at 90hz (60hz - 90hz green tint removal or boosting)
+static bool replace_gamma_table = false;
+static bool replace_gamma_table_dynamic = false;
+static int replace_gamma_dynamic_red = 10;
+static int replace_gamma_dynamic_green = 10;
+static int replace_gamma_dynamic_blue = 10;
+static int replace_gamma_dynamic_red_low = 10;
+static int replace_gamma_dynamic_green_low = 10;
+static int replace_gamma_dynamic_blue_low = 10;
+static int replace_gamma_dynamic_red_mid = 10;
+static int replace_gamma_dynamic_green_mid = 10;
+static int replace_gamma_dynamic_blue_mid = 10;
+
+static int replace_gamma_dynamic_freq_corr_hi = 20;
+static int replace_gamma_dynamic_freq_corr_mid = 20;
+static int replace_gamma_dynamic_freq_corr_low = 20;
+static int replace_gamma_dynamic_freq_corr_green_bias_low = 10;
+
+bool get_replace_gamma_table_dynamic(void) {
+        return replace_gamma_table_dynamic;
+}
+EXPORT_SYMBOL(get_replace_gamma_table_dynamic);
+
+int get_replace_gamma_dynamic_red(void) {
+        return replace_gamma_dynamic_red;
+}
+EXPORT_SYMBOL(get_replace_gamma_dynamic_red);
+int get_replace_gamma_dynamic_green(void) {
+        return replace_gamma_dynamic_green;
+}
+EXPORT_SYMBOL(get_replace_gamma_dynamic_green);
+int get_replace_gamma_dynamic_blue(void) {
+        return replace_gamma_dynamic_blue;
+}
+EXPORT_SYMBOL(get_replace_gamma_dynamic_blue);
+
+int get_replace_gamma_dynamic_red_low(void) {
+        return replace_gamma_dynamic_red_low;
+}
+EXPORT_SYMBOL(get_replace_gamma_dynamic_red_low);
+int get_replace_gamma_dynamic_green_low(void) {
+        return replace_gamma_dynamic_green_low;
+}
+EXPORT_SYMBOL(get_replace_gamma_dynamic_green_low);
+
+int get_replace_gamma_dynamic_blue_low(void) {
+        return replace_gamma_dynamic_blue_low;
+}
+EXPORT_SYMBOL(get_replace_gamma_dynamic_blue_low);
+
+int get_replace_gamma_dynamic_red_mid(void) {
+        return replace_gamma_dynamic_red_mid;
+}
+EXPORT_SYMBOL(get_replace_gamma_dynamic_red_mid);
+int get_replace_gamma_dynamic_green_mid(void) {
+        return replace_gamma_dynamic_green_mid;
+}
+EXPORT_SYMBOL(get_replace_gamma_dynamic_green_mid);
+int get_replace_gamma_dynamic_blue_mid(void) {
+        return replace_gamma_dynamic_blue_mid;
+}
+EXPORT_SYMBOL(get_replace_gamma_dynamic_blue_mid);
+
+int get_replace_gamma_dynamic_freq_corr_hi(void) {
+        return replace_gamma_dynamic_freq_corr_hi;
+}
+EXPORT_SYMBOL(get_replace_gamma_dynamic_freq_corr_hi);
+int get_replace_gamma_dynamic_freq_corr_mid(void) {
+        return replace_gamma_dynamic_freq_corr_mid;
+}
+EXPORT_SYMBOL(get_replace_gamma_dynamic_freq_corr_mid);
+int get_replace_gamma_dynamic_freq_corr_low(void) {
+        return replace_gamma_dynamic_freq_corr_low;
+}
+EXPORT_SYMBOL(get_replace_gamma_dynamic_freq_corr_low);
+int get_replace_gamma_dynamic_freq_corr_green_bias_low(void) {
+        return replace_gamma_dynamic_freq_corr_green_bias_low;
+}
+EXPORT_SYMBOL(get_replace_gamma_dynamic_freq_corr_green_bias_low);
+
+bool get_replace_gamma_table(void) {
+        return replace_gamma_table;
+}
+EXPORT_SYMBOL(get_replace_gamma_table);
+
+// -------------------
+
 
 static bool last_hbm_mode = false;
 
@@ -138,10 +227,91 @@ static void uci_sys_listener(void) {
 }
 static int dsi_backlight_update_status(struct backlight_device *bd);
 
+extern void uci_trigger_mode_update(bool force_mode_change);
+
+static void check_forced_panel_mode_updates(bool force_mode_change) {
+    if (screen_on) { // only call release when screen is on, otherwise DSI driver will get locked
+        uci_trigger_mode_update(force_mode_change);
+    }
+}
+
 static void uci_user_listener(void) {
 
 	bool new_hbm_switch = !!uci_get_user_property_int_mm("hbm_switch", 0, 0, 1);
 	bool new_hbm_use_ambient_light = !!uci_get_user_property_int_mm("hbm_use_ambient_light", 0, 0, 1);
+
+        bool new_replace_gamma_table = !!uci_get_user_property_int_mm("replace_gamma_table", 0, 0, 1);
+        bool new_replace_gamma_table_dynamic = !!uci_get_user_property_int_mm("replace_gamma_table_dynamic", 0, 0, 1);
+        int new_replace_gamma_dynamic_red = uci_get_user_property_int_mm("replace_gamma_dynamic_red", 10, 0, 25);
+        int new_replace_gamma_dynamic_green = uci_get_user_property_int_mm("replace_gamma_dynamic_green", 10, 0, 25);
+        int new_replace_gamma_dynamic_blue = uci_get_user_property_int_mm("replace_gamma_dynamic_blue", 10, 0, 25);
+        int new_replace_gamma_dynamic_red_low = uci_get_user_property_int_mm("replace_gamma_dynamic_red_low", 10, 0, 20);
+        int new_replace_gamma_dynamic_green_low = uci_get_user_property_int_mm("replace_gamma_dynamic_green_low", 10, 0, 20);
+        int new_replace_gamma_dynamic_blue_low = uci_get_user_property_int_mm("replace_gamma_dynamic_blue_low", 10, 0, 20);
+        int new_replace_gamma_dynamic_red_mid = uci_get_user_property_int_mm("replace_gamma_dynamic_red_mid", 10, 0, 20);
+        int new_replace_gamma_dynamic_green_mid = uci_get_user_property_int_mm("replace_gamma_dynamic_green_mid", 10, 0, 20);
+        int new_replace_gamma_dynamic_blue_mid = uci_get_user_property_int_mm("replace_gamma_dynamic_blue_mid", 10, 0, 20);
+
+        int new_replace_gamma_dynamic_freq_corr_hi = uci_get_user_property_int_mm("replace_gamma_dynamic_freq_corr_hi", 20, 0, 40);
+        int new_replace_gamma_dynamic_freq_corr_mid = uci_get_user_property_int_mm("replace_gamma_dynamic_freq_corr_mid", 20, 0, 40);
+        int new_replace_gamma_dynamic_freq_corr_low = uci_get_user_property_int_mm("replace_gamma_dynamic_freq_corr_low", 20, 0, 40);
+        int new_replace_gamma_dynamic_freq_corr_green_bias_low = uci_get_user_property_int_mm("replace_gamma_dynamic_freq_corr_green_bias_low", 30, 0, 60);
+
+        // if any panel freq / gamma related user config changed, do the check...
+        if (
+                new_replace_gamma_table!=replace_gamma_table ||
+                new_replace_gamma_table_dynamic!=replace_gamma_table_dynamic ||
+                new_replace_gamma_dynamic_red!=replace_gamma_dynamic_red ||
+                new_replace_gamma_dynamic_green!=replace_gamma_dynamic_green ||
+                new_replace_gamma_dynamic_blue!=replace_gamma_dynamic_blue ||
+                new_replace_gamma_dynamic_red_low!=replace_gamma_dynamic_red_low ||
+                new_replace_gamma_dynamic_green_low!=replace_gamma_dynamic_green_low ||
+                new_replace_gamma_dynamic_blue_low!=replace_gamma_dynamic_blue_low ||
+                new_replace_gamma_dynamic_red_mid!=replace_gamma_dynamic_red_mid ||
+                new_replace_gamma_dynamic_green_mid!=replace_gamma_dynamic_green_mid ||
+                new_replace_gamma_dynamic_blue_mid!=replace_gamma_dynamic_blue_mid ||
+                new_replace_gamma_dynamic_freq_corr_hi!=replace_gamma_dynamic_freq_corr_hi ||
+                new_replace_gamma_dynamic_freq_corr_mid!=replace_gamma_dynamic_freq_corr_mid ||
+                new_replace_gamma_dynamic_freq_corr_low!=replace_gamma_dynamic_freq_corr_low ||
+                new_replace_gamma_dynamic_freq_corr_green_bias_low!=replace_gamma_dynamic_freq_corr_green_bias_low
+	    )
+        {
+
+                bool force_mode_change = new_replace_gamma_table!=replace_gamma_table ||
+                        new_replace_gamma_table_dynamic!=replace_gamma_table_dynamic ||
+                        new_replace_gamma_dynamic_red!=replace_gamma_dynamic_red ||
+                        new_replace_gamma_dynamic_green!=replace_gamma_dynamic_green ||
+                        new_replace_gamma_dynamic_blue!=replace_gamma_dynamic_blue ||
+                        new_replace_gamma_dynamic_red_low!=replace_gamma_dynamic_red_low ||
+                        new_replace_gamma_dynamic_green_low!=replace_gamma_dynamic_green_low ||
+                        new_replace_gamma_dynamic_blue_low!=replace_gamma_dynamic_blue_low ||
+                        new_replace_gamma_dynamic_red_mid!=replace_gamma_dynamic_red_mid ||
+                        new_replace_gamma_dynamic_green_mid!=replace_gamma_dynamic_green_mid ||
+                        new_replace_gamma_dynamic_blue_mid!=replace_gamma_dynamic_blue_mid ||
+                        new_replace_gamma_dynamic_freq_corr_hi!=replace_gamma_dynamic_freq_corr_hi ||
+                        new_replace_gamma_dynamic_freq_corr_mid!=replace_gamma_dynamic_freq_corr_mid ||
+                        new_replace_gamma_dynamic_freq_corr_low!=replace_gamma_dynamic_freq_corr_low ||
+                        new_replace_gamma_dynamic_freq_corr_green_bias_low!=replace_gamma_dynamic_freq_corr_green_bias_low;
+
+                replace_gamma_table = new_replace_gamma_table;
+                replace_gamma_table_dynamic = new_replace_gamma_table_dynamic;
+                replace_gamma_dynamic_red = new_replace_gamma_dynamic_red;
+                replace_gamma_dynamic_green = new_replace_gamma_dynamic_green;
+                replace_gamma_dynamic_blue = new_replace_gamma_dynamic_blue;
+                replace_gamma_dynamic_red_low = new_replace_gamma_dynamic_red_low;
+                replace_gamma_dynamic_green_low = new_replace_gamma_dynamic_green_low;
+                replace_gamma_dynamic_blue_low = new_replace_gamma_dynamic_blue_low;
+                replace_gamma_dynamic_red_mid = new_replace_gamma_dynamic_red_mid;
+                replace_gamma_dynamic_green_mid = new_replace_gamma_dynamic_green_mid;
+                replace_gamma_dynamic_blue_mid = new_replace_gamma_dynamic_blue_mid;
+                replace_gamma_dynamic_freq_corr_hi = new_replace_gamma_dynamic_freq_corr_hi;
+                replace_gamma_dynamic_freq_corr_mid = new_replace_gamma_dynamic_freq_corr_mid;
+                replace_gamma_dynamic_freq_corr_low = new_replace_gamma_dynamic_freq_corr_low;
+                replace_gamma_dynamic_freq_corr_green_bias_low = new_replace_gamma_dynamic_freq_corr_green_bias_low;
+
+                check_forced_panel_mode_updates(force_mode_change);
+	}
+
 
 	lp_kcal_overlay = !!uci_get_user_property_int_mm("lp_kcal_overlay", 0, 0, 1);
 	lp_kcal_overlay_always = !!uci_get_user_property_int_mm("lp_kcal_overlay_always", 1, 0, 1);

@@ -26,6 +26,33 @@
 #include "sde_trace.h"
 #include "sde_connector.h"
 
+#ifdef CONFIG_UCI
+//#include "dsi_custom_gamma.h"
+//#include "dsi_custom_gamma_op7pro.h"
+
+static struct dsi_panel *g_panel = NULL;
+static struct panel_switch_data *g_pdata = NULL;
+
+extern bool get_replace_gamma_table(void);
+
+extern bool get_replace_gamma_table_dynamic(void);
+extern int get_replace_gamma_dynamic_red(void);
+extern int get_replace_gamma_dynamic_green(void);
+extern int get_replace_gamma_dynamic_blue(void);
+extern int get_replace_gamma_dynamic_red_low(void);
+extern int get_replace_gamma_dynamic_green_low(void);
+extern int get_replace_gamma_dynamic_blue_low(void);
+extern int get_replace_gamma_dynamic_red_mid(void);
+extern int get_replace_gamma_dynamic_green_mid(void);
+extern int get_replace_gamma_dynamic_blue_mid(void);
+extern int get_replace_gamma_dynamic_freq_corr_hi(void);
+extern int get_replace_gamma_dynamic_freq_corr_mid(void);
+extern int get_replace_gamma_dynamic_freq_corr_low(void);
+extern int get_replace_gamma_dynamic_freq_corr_green_bias_low(void);
+
+#endif
+
+
 #define DSI_PANEL_GAMMA_NAME "google,dsi_s6e3hc2_gamma"
 #define DSI_PANEL_SWITCH_NAME "google,dsi_panel_switch"
 
@@ -391,6 +418,26 @@ static void panel_queue_switch(struct panel_switch_data *pdata,
 
 	kthread_queue_work(&pdata->worker, &pdata->switch_work);
 }
+
+#ifdef CONFIG_UCI
+static void uci_release_panel_queue_switch_work_func(struct work_struct * uci_release_panel_queue_switch_work)
+{
+        if (g_panel!=NULL) {
+                panel_queue_switch(g_pdata, g_panel->cur_mode);
+        }
+}
+static DECLARE_WORK(uci_release_panel_queue_switch_work, uci_release_panel_queue_switch_work_func);
+
+void uci_trigger_mode_update(bool force_mode_change) {
+        if (g_panel!=NULL) {
+                if (force_mode_change) {
+                        pr_info("%s [cleanslate] release forced freq \n",__func__);
+                        schedule_work(&uci_release_panel_queue_switch_work);
+                }
+        }
+}
+EXPORT_SYMBOL(uci_trigger_mode_update);
+#endif
 
 static int panel_switch(struct dsi_panel *panel)
 {
@@ -1069,14 +1116,35 @@ struct s6e3hc2_panel_data {
 	u8 *native_gamma_data[S6E3HC2_NUM_GAMMA_TABLES];
 };
 
+#ifdef CONFIG_UCI
+static void post_calc_gamma(int freq, void *source_table, void *target_table, int table_idx,
+                int red_low_coeff, int red_mid_coeff, int red_coeff,
+                int green_low_coeff, int green_mid_coeff, int green_coeff,
+                int blue_low_coeff, int blue_mid_coeff, int blue_coeff,
+                int freq_corr_low, int freq_corr_mid, int freq_corr_hi,
+                int freq_corr_green_bias_low);
+#endif
+
+#ifdef CONFIG_UCI
+static void s6e3hc2_gamma_group_write(struct panel_switch_data *pdata,
+				struct s6e3hc2_panel_data *priv_data,
+				const struct s6e3hc2_gamma_packet_group *group, const struct dsi_display_mode *mode)
+#else
 static void s6e3hc2_gamma_group_write(struct panel_switch_data *pdata,
 				struct s6e3hc2_panel_data *priv_data,
 				const struct s6e3hc2_gamma_packet_group *group)
+#endif
 {
 	const struct s6e3hc2_gamma_info *info;
 	const void *data;
 	size_t len;
 	int i;
+
+#ifdef CONFIG_UCI
+	u8 target_table[15*50];
+	bool should_replace_gamma = get_replace_gamma_table() && get_replace_gamma_table_dynamic();
+#endif
+
 
 	for (i = 0; i < group->num_packets; i++) {
 		const u32 ndx = group->packets[i].index;
@@ -1098,7 +1166,34 @@ static void s6e3hc2_gamma_group_write(struct panel_switch_data *pdata,
 		pr_debug("Writing %d bytes to 0x%02X gamma last: %d\n",
 			 len, info->cmd, last_packet);
 
-
+#ifdef CONFIG_UCI
+                if (should_replace_gamma) {
+	                const void *calc_table = &target_table;
+                        int cnt = 0;
+                        u8 *src_data = priv_data->gamma_data[ndx];
+                        for (cnt=0;cnt<len;cnt++) {
+                                target_table[cnt] = src_data[cnt];
+                        }
+                        post_calc_gamma(mode->timing.refresh_rate,
+                                src_data,&target_table,ndx,
+                                get_replace_gamma_dynamic_red_low(),
+                                get_replace_gamma_dynamic_red_mid(),
+                                get_replace_gamma_dynamic_red(),
+                                get_replace_gamma_dynamic_green_low(),
+                                get_replace_gamma_dynamic_green_mid(),
+                                get_replace_gamma_dynamic_green(),
+                                get_replace_gamma_dynamic_blue_low(),
+                                get_replace_gamma_dynamic_blue_mid(),
+                                get_replace_gamma_dynamic_blue(),
+                                get_replace_gamma_dynamic_freq_corr_low(),
+                                get_replace_gamma_dynamic_freq_corr_mid(),
+                                get_replace_gamma_dynamic_freq_corr_hi(),
+                                get_replace_gamma_dynamic_freq_corr_green_bias_low());
+			if (IS_ERR_VALUE(panel_dsi_write_buf(pdata->panel, calc_table, len,
+						last_packet)))
+				pr_warn("failed sending gamma cmd 0x%02x\n", info->cmd);
+                } else
+#endif
 		if (IS_ERR_VALUE(panel_dsi_write_buf(pdata->panel, data, len,
 					last_packet)))
 			pr_warn("failed sending gamma cmd 0x%02x\n", info->cmd);
@@ -1140,7 +1235,11 @@ static void s6e3hc2_gamma_update(struct panel_switch_data *pdata,
 	pr_debug("Found packet ndx=%d for dbv=%02X\n", i, dbv);
 
 	for (i = 0; i < packet->num_groups; i++)
+#ifdef CONFIG_UCI
+		s6e3hc2_gamma_group_write(pdata, priv_data, &packet->groups[i], mode);
+#else
 		s6e3hc2_gamma_group_write(pdata, priv_data, &packet->groups[i]);
+#endif
 }
 
 static void s6e3hc2_gamma_update_reg_locked(struct panel_switch_data *pdata,
@@ -1326,6 +1425,220 @@ static int s6e3hc2_gamma_alloc_mode_memory(const struct dsi_display_mode *mode)
 
 	return 0;
 }
+
+#ifdef CONFIG_UCI
+struct gamma_color {
+        s16 r;
+        s16 g;
+        s16 b;
+};
+
+/*
+ * Gamma bands are represented in groups of 4 x 10-bit per color (3) component
+ *   4 * 3 color components * 10 bit = 15 bytes
+ *
+ * The MSB (upper) 2 bits of each color are all found packed at the beginning of
+ * the group (2 bits * 12 = 3 bytes) in big endian memory layout.
+ * This is followed by the LSB (lower) 8 bits.
+ */
+static void s6e3hc2_gamma_band_offsets(int band_idx, u8 color, int *lsb_idx,
+                                       int *msb_idx, int *msb_shift,
+                                       u8 *msb_mask)
+{
+        const int index = ((band_idx % 4) * 3) + color;
+        const int group_offset = 15 * (band_idx / 4);
+
+        /* one byte per color LSB, skipping 3 bytes within group for MSB */
+        *lsb_idx = group_offset + 3 + index;
+
+        /* each byte can hold 4 colors MSB, 2 bits each */
+        *msb_idx = group_offset + (index / 4);
+        *msb_shift = 2 * ((index % 4) + 1);
+        *msb_mask = 0x3 << (BITS_PER_BYTE - *msb_shift);
+}
+
+static u16 s6e3hc2_gamma_get_color(u8 *buf, int band_idx, u8 color)
+{
+        int msb_idx, lsb_idx, msb_shift;
+        u8 msb_mask;
+
+        s6e3hc2_gamma_band_offsets(band_idx, color, &lsb_idx, &msb_idx,
+                                   &msb_shift, &msb_mask);
+
+        return ((buf[msb_idx] & msb_mask) << msb_shift) | buf[lsb_idx];
+}
+
+static void s6e3hc2_gamma_set_color(u8 *buf, int band_idx, u8 color, u16 val)
+{
+        int msb_idx, lsb_idx, msb_shift;
+        u8 msb_mask;
+
+        s6e3hc2_gamma_band_offsets(band_idx, color, &lsb_idx, &msb_idx,
+                                   &msb_shift, &msb_mask);
+
+        buf[lsb_idx] = val & 0xFF;
+        buf[msb_idx] &= ~msb_mask;
+        buf[msb_idx] |= (val >> msb_shift) & msb_mask;
+}
+
+static void s6e3hc2_gamma_get_rgb(void *buf, int band_idx,
+                                  struct gamma_color *color)
+{
+        /* buf should point at the beginning of a 45 byte gamma band */
+        color->r = s6e3hc2_gamma_get_color(buf, band_idx, 0);
+        color->g = s6e3hc2_gamma_get_color(buf, band_idx, 1);
+        color->b = s6e3hc2_gamma_get_color(buf, band_idx, 2);
+}
+
+static int s6e3hc2_gamma_set_rgb(void *buf, int band_idx,
+                                 struct gamma_color *color)
+{
+        if (color->r < 0 || color->g < 0 || color->b < 0) {
+                pr_err("Invalid color value %03X %03X %03X for band=%d\n",
+                       color->r, color->g, color->b, band_idx);
+                return -EINVAL;
+        }
+
+        /* buf should point at the beginning of a 45 byte gamma band */
+        s6e3hc2_gamma_set_color(buf, band_idx, 0, color->r);
+        s6e3hc2_gamma_set_color(buf, band_idx, 1, color->g);
+        s6e3hc2_gamma_set_color(buf, band_idx, 2, color->b);
+
+        return 0;
+}
+
+
+// calculate -20% - +20% based on coefficient 0-20 values (doubled in the calculations)
+static s16 calc_new_val(s16 src, s16 coeff, s16 corr_coeff) {
+        s16 r = src;
+        if (coeff == 10 && corr_coeff == 10) {
+                pr_debug("%s [cleanslate] return original value...\n",__func__);
+                return r;
+        }
+        r = (src * (80+(coeff*2)))/100;
+        pr_debug("%s [cleanslate] calc: src %d coeff %d ret %d...\n",__func__,src,coeff,r);
+        r = (r * (180+(corr_coeff)))/200;
+        pr_debug("%s [cleanslate] calc: src %d corr coeff %d ret %d...\n",__func__,src,corr_coeff,r);
+        // todo max?
+        return r;
+}
+
+// all command tables contain N groups, 3,4,1 respectively. Each contains 12 bands (RGB values)
+// (3 + 4 + 1) * max_band_idx; // 8 * 12 bands altogether - this is the maximum number of different brightness bands.
+#define MAX_NOTCH (8 * 12)
+#define MIDDLE_NOTCH (MAX_NOTCH / 2)
+// maximum number of bqnds in one Gamma band grouping
+#define MAX_BAND_IDX 12
+
+/* calculate the value between low_coeff and coeff, based on NOTCH value relative to MAX_NOTCH value */
+static int calc_current_coeff(int notch, int low_coeff, int mid_coeff, int coeff, bool bias_lowering, int bias_number) {
+        int ret = 0;
+        if (notch <= MIDDLE_NOTCH) { // low to mid coeffs...
+                // calc: difference between the lowest coeff and target mid coeff, and get it's current added value based on notch relative to max notch
+                int coeff_diff_ratio = ((mid_coeff - low_coeff) * notch) / (MIDDLE_NOTCH);
+                ret = low_coeff + coeff_diff_ratio; // return lowest coeff and the current notch relative value. At MAX notch reached, value returned here will be exactly coeff
+                if (bias_lowering) {
+                        ret = ret + ((bias_number * (MIDDLE_NOTCH - notch)) / MIDDLE_NOTCH);
+                }
+        } else {
+                // calc: difference between the mid coeff and target high coeff, and get it's current added value based on notch relative to max notch
+                int coeff_diff_ratio = ((coeff - mid_coeff) * (notch - MIDDLE_NOTCH)) / (MIDDLE_NOTCH);
+                ret = mid_coeff + coeff_diff_ratio; // return lowest coeff and the current notch relative value. At MAX notch reached, value returned here will be exactly coeff
+        }
+        return ret;
+}
+
+/**
+ * Based on the table index (c8,c9,b3 command starte sections), gamma idx (gamma band groups containing 12 rgb bands),
+ * and in group band_idx, calculate which brightness notch is the current RGB position is. We use the notch to balance between
+ * user set RGB low and RGB high coefficients to stretch out the deltas between the two coefficients.
+ * The higher the notch, the closer the RGB high coefficient we should get from RGB low coefficients.
+ */
+static int calc_current_notch(int table_idx, int gamma_idx, int band_idx) {
+        int ret = 0;
+        if (table_idx == 0) ret = 0 * 12 + (gamma_idx * MAX_BAND_IDX) + band_idx;
+        if (table_idx == 1) ret = 3 * 12 + (gamma_idx * MAX_BAND_IDX) + band_idx;
+
+        // HIGH BRIGHTNESS MODE, should calculate separately, starting from (0 * 12).
+        // to have the right high notch values after subtraction below.
+        // hbm table (b9 cmd) is the last in the tables, and thus notch values would be too low if here we don't restart notch from 0.
+        if (table_idx == 2) ret = 0 * 12 + (gamma_idx * MAX_BAND_IDX) + band_idx;
+
+        ret = MAX_NOTCH - ret; // notches should be reverted. The values in the low bands, tables are for the higher brightness values
+        return ret;
+}
+
+/*
+ * Calc new Gamma RGB band values from source gamma table byte array into a target gamma table byte array.
+ * Use coeff low and coeff high RGB component biases to change surce RGB values.
+ * Low coeff is used for low brightness Gamma bands, High coeff is for high brightness gamma bands.
+ * Frequency FPS is taken into consideration, to alleviate the differences especially present on low brightness ranges,
+ *   60 hertz usually being darker than 90hz on those panel brightnesses.
+ */
+
+static void post_calc_gamma(int freq, void *source_table, void *target_table, int table_idx,
+                int red_low_coeff, int red_mid_coeff, int red_coeff,
+                int green_low_coeff, int green_mid_coeff, int green_coeff,
+                int blue_low_coeff, int blue_mid_coeff, int blue_coeff,
+                int freq_corr_low, int freq_corr_mid, int freq_corr_hi,
+                int freq_corr_green_bias_low)
+{
+        int gamma_idx = 0;
+
+        // calculate the maximum gamma index (groups) in the table. Each command's table has different number of gamma groups respectively.
+        int max_gamma_idx = table_idx == 0 ? 3 : table_idx == 1 ? 4 : 1; // command c8 (0), c9 (1), b3 (2) --> 3 groups, 4 groups, 1 (HBM)
+        int max_band_idx = MAX_BAND_IDX;
+
+        pr_info("%s [cleanslate] calc... table_idx %d max_gamma_idx %d max_band_idx %d\n",__func__,table_idx,max_gamma_idx,max_band_idx);
+        for (gamma_idx=0; gamma_idx<max_gamma_idx; gamma_idx++) {
+                int band_idx = 0;
+                const int gamma_offset = gamma_idx * S6E3HC2_GAMMA_BAND_LEN;
+                const int len = s6e3hc2_gamma_tables[table_idx].len;
+                struct gamma_color gamma_src;
+                void *buf_src, *buf_target;
+                pr_debug("%s [cleanslate] calc... gamma_idx %d\n",__func__, gamma_idx);
+                if (unlikely(gamma_offset + S6E3HC2_GAMMA_BAND_LEN > len)) {
+                        pr_warn("%s [cleanslate] calc out of BAND array %d...\n",__func__, gamma_offset);
+                        return;
+                }
+
+                buf_src = source_table + gamma_offset + (table_idx == 2 ? 3:1);
+                buf_target = target_table + gamma_offset + (table_idx == 2 ? 3:1);
+                for (band_idx = 0; band_idx<max_band_idx; band_idx++) {
+                        int current_notch = calc_current_notch(table_idx, gamma_idx, band_idx);
+                        int src_r = 0;
+                        int src_g = 0;
+                        int src_b = 0;
+                        pr_debug("%s [cleanslate] calc... gamma_idx %d band_idx %d -- r %d g %d b %d - current notch %d\n",__func__, gamma_idx, band_idx,red_coeff,green_coeff,blue_coeff,current_notch);
+                        s6e3hc2_gamma_get_rgb(buf_src, band_idx, &gamma_src); // get the source RGB values...
+                        src_r = gamma_src.r;
+                        src_g = gamma_src.g;
+                        src_b = gamma_src.b;
+                        // calculate target values...
+                        gamma_src.r = calc_new_val(gamma_src.r ,
+                                        calc_current_coeff(current_notch,red_low_coeff,red_mid_coeff,red_coeff,false,0),
+                                        (freq<90?calc_current_coeff(current_notch,freq_corr_low,freq_corr_mid,freq_corr_hi,false,0):10)
+                                );
+                        gamma_src.g = calc_new_val(gamma_src.g ,
+                                        calc_current_coeff(current_notch,green_low_coeff,green_mid_coeff,green_coeff,false,0),
+                                                                                                                // use bias for greens, dampen them on 60hz
+                                        (freq<90?calc_current_coeff(current_notch,freq_corr_low,freq_corr_mid,freq_corr_hi, true, -30+freq_corr_green_bias_low):10)
+                                );
+                        gamma_src.b = calc_new_val(gamma_src.b ,
+                                        calc_current_coeff(current_notch,blue_low_coeff,blue_mid_coeff,blue_coeff,false,0),
+                                        (freq<90?calc_current_coeff(current_notch,freq_corr_low,freq_corr_mid,freq_corr_hi, false, 0):10)
+                                );
+                        pr_debug("%s [cleanslate] calc finished... src %d calc r %d \n",__func__,src_r,gamma_src.r);
+                        pr_debug("%s [cleanslate] calc finished... src %d calc g %d \n",__func__,src_g,gamma_src.g);
+                        pr_debug("%s [cleanslate] calc finished... src %d calc b %d \n",__func__,src_b,gamma_src.b);
+                        s6e3hc2_gamma_set_rgb(buf_target, band_idx, &gamma_src);
+                }
+        }
+        pr_info("%s [cleanslate] calc finished...\n",__func__);
+}
+#endif
+
+
 
 static int s6e3hc2_gamma_read_mode(struct panel_switch_data *pdata,
 				   const struct dsi_display_mode *mode)
@@ -2277,6 +2590,13 @@ int dsi_panel_switch_init(struct dsi_panel *panel)
 		return -ENOENT;
 
 	pdata->funcs = funcs;
+
+#ifdef CONFIG_UCI
+        if (g_pdata==NULL) {
+                g_pdata = pdata;
+                g_panel = panel;
+        }
+#endif
 
 	if (pdata->funcs->support_cali_gamma_store) {
 		if (sysfs_create_group(&panel->parent->kobj,
