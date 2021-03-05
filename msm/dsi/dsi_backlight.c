@@ -58,6 +58,7 @@ static struct dsi_backlight_config *bl_g;
 // ---------- GAMM tweaks: dynamic
 // should the gamma values be tweaked at 90hz (60hz - 90hz green tint removal or boosting)
 static bool replace_gamma_table = false;
+static bool replace_gamma_table_fully_on_high_brightness = false;
 static bool replace_gamma_table_dynamic = false;
 static int replace_gamma_dynamic_red = 10;
 static int replace_gamma_dynamic_green = 10;
@@ -74,8 +75,17 @@ static int replace_gamma_dynamic_freq_corr_mid = 20;
 static int replace_gamma_dynamic_freq_corr_low = 20;
 static int replace_gamma_dynamic_freq_corr_green_bias_low = 10;
 
+static bool high_brightness_detected = false;
+
 bool get_replace_gamma_table_dynamic(void) {
-        return replace_gamma_table_dynamic;
+        if (replace_gamma_table_dynamic) {
+		if (replace_gamma_table_fully_on_high_brightness && !high_brightness_detected)
+		{
+			return false; // not in bright env, don't replace
+		}
+		return true;
+	}
+	return false;
 }
 EXPORT_SYMBOL(get_replace_gamma_table_dynamic);
 
@@ -140,7 +150,6 @@ bool get_replace_gamma_table(void) {
         return replace_gamma_table;
 }
 EXPORT_SYMBOL(get_replace_gamma_table);
-
 // -------------------
 
 
@@ -184,10 +193,32 @@ static int lp_kcal_overlay_level = 50;
 
 //
 extern void uci_force_sde_update(void);
+extern void uci_trigger_mode_update(bool force_mode_change);
+
+static void check_forced_panel_mode_updates(bool force_mode_change) {
+    if (screen_on) { // only call release when screen is on, otherwise DSI driver will get locked
+        uci_trigger_mode_update(force_mode_change);
+    }
+}
 
 static void uci_sys_listener(void) {
 	if (screen_wake_by_user) {
 		int new_lux_level = uci_get_sys_property_int_mm("lux_level", 0, 0, 270000);
+		if (screen_on) {
+			if (new_lux_level==0) {
+				if (high_brightness_detected) {
+					high_brightness_detected = false;
+					if (replace_gamma_table_fully_on_high_brightness)
+						check_forced_panel_mode_updates(true);
+				}
+			} else {
+				if (!high_brightness_detected) {
+					high_brightness_detected = true;
+					if (replace_gamma_table_fully_on_high_brightness)
+						check_forced_panel_mode_updates(true);
+				}
+			}
+		}
 		if (!uci_hbm_switch) {  // hbm switch is off..
 			if (last_hbm_mode) { // and it's set to hbm already in driver.. switch it off
 				uci_switch_hbm(0);
@@ -227,13 +258,6 @@ static void uci_sys_listener(void) {
 }
 static int dsi_backlight_update_status(struct backlight_device *bd);
 
-extern void uci_trigger_mode_update(bool force_mode_change);
-
-static void check_forced_panel_mode_updates(bool force_mode_change) {
-    if (screen_on) { // only call release when screen is on, otherwise DSI driver will get locked
-        uci_trigger_mode_update(force_mode_change);
-    }
-}
 
 static void uci_user_listener(void) {
 
@@ -241,6 +265,7 @@ static void uci_user_listener(void) {
 	bool new_hbm_use_ambient_light = !!uci_get_user_property_int_mm("hbm_use_ambient_light", 0, 0, 1);
 
         bool new_replace_gamma_table = !!uci_get_user_property_int_mm("replace_gamma_table", 0, 0, 1);
+	bool new_replace_gamma_table_fully_on_high_brightness = !!uci_get_user_property_int_mm("replace_gamma_table_fully_on_high_brightness", 0, 0, 1);
         bool new_replace_gamma_table_dynamic = !!uci_get_user_property_int_mm("replace_gamma_table_dynamic", 0, 0, 1);
         int new_replace_gamma_dynamic_red = uci_get_user_property_int_mm("replace_gamma_dynamic_red", 10, 0, 25);
         int new_replace_gamma_dynamic_green = uci_get_user_property_int_mm("replace_gamma_dynamic_green", 10, 0, 25);
@@ -273,7 +298,8 @@ static void uci_user_listener(void) {
                 new_replace_gamma_dynamic_freq_corr_hi!=replace_gamma_dynamic_freq_corr_hi ||
                 new_replace_gamma_dynamic_freq_corr_mid!=replace_gamma_dynamic_freq_corr_mid ||
                 new_replace_gamma_dynamic_freq_corr_low!=replace_gamma_dynamic_freq_corr_low ||
-                new_replace_gamma_dynamic_freq_corr_green_bias_low!=replace_gamma_dynamic_freq_corr_green_bias_low
+                new_replace_gamma_dynamic_freq_corr_green_bias_low!=replace_gamma_dynamic_freq_corr_green_bias_low ||
+		new_replace_gamma_table_fully_on_high_brightness != replace_gamma_table_fully_on_high_brightness
 	    )
         {
 
@@ -291,7 +317,8 @@ static void uci_user_listener(void) {
                         new_replace_gamma_dynamic_freq_corr_hi!=replace_gamma_dynamic_freq_corr_hi ||
                         new_replace_gamma_dynamic_freq_corr_mid!=replace_gamma_dynamic_freq_corr_mid ||
                         new_replace_gamma_dynamic_freq_corr_low!=replace_gamma_dynamic_freq_corr_low ||
-                        new_replace_gamma_dynamic_freq_corr_green_bias_low!=replace_gamma_dynamic_freq_corr_green_bias_low;
+                        new_replace_gamma_dynamic_freq_corr_green_bias_low!=replace_gamma_dynamic_freq_corr_green_bias_low ||
+			new_replace_gamma_table_fully_on_high_brightness!=replace_gamma_table_fully_on_high_brightness;
 
                 replace_gamma_table = new_replace_gamma_table;
                 replace_gamma_table_dynamic = new_replace_gamma_table_dynamic;
@@ -308,6 +335,7 @@ static void uci_user_listener(void) {
                 replace_gamma_dynamic_freq_corr_mid = new_replace_gamma_dynamic_freq_corr_mid;
                 replace_gamma_dynamic_freq_corr_low = new_replace_gamma_dynamic_freq_corr_low;
                 replace_gamma_dynamic_freq_corr_green_bias_low = new_replace_gamma_dynamic_freq_corr_green_bias_low;
+		replace_gamma_table_fully_on_high_brightness = new_replace_gamma_table_fully_on_high_brightness;
 
                 check_forced_panel_mode_updates(force_mode_change);
 	}
